@@ -1660,8 +1660,11 @@ fun solve c =
     of TRIVIAL => idsubst
      | (t1 ~ t2) => 
         (case (t1, t2) 
-          of (TYVAR t1, TYVAR t2) => t1 |--> TYVAR t2
-           | (TYVAR t1, TYCON t2) => t1 |--> TYCON t2
+          of (TYVAR t, _) => if not (member t1 (freetyvars t2)))
+                                      then 
+                                        t1 |--> t2
+                                      else 
+                                       unsatisfiableEquality (t1, t2)
            | (TYCON t1, TYVAR t2) => t2 |--> TYCON t1
            | (TYCON t1, TYCON t2) => if eqType(TYCON t1, TYCON t2)
                                      then 
@@ -1674,11 +1677,7 @@ fun solve c =
                                       else 
                                        unsatisfiableEquality (CONAPP t1, TYVAR t2)
            (* | (CONAPP t1, TYCON t2) => unsatisfiableEquality (CONAPP t1, TYCON t2) *)
-           | (TYVAR t1, CONAPP t2) => if not (member t1 (freetyvars (CONAPP t2)))
-                                      then 
-                                        t1 |--> CONAPP t2
-                                      else 
-                                       unsatisfiableEquality (TYVAR t1, CONAPP t2)
+           
            (* | (TYCON t1, CONAPP t2) => unsatisfiableEquality (TYCON t1, CONAPP t2) *)
            | (CONAPP (t1, l1), CONAPP (t2, l2)) => 
                 (case (l1, l2) 
