@@ -1649,7 +1649,64 @@ fun unsatisfiableEquality (t1, t2) =
          | _ => raise InternalError "failed to synthesize canonical type"
   end
 (* constraint solving ((prototype)) 437b *)
-fun solve c = raise LeftAsExercise "solve"
+
+(* DO NOW *)
+(* solve : con -> subst *)
+(* takes as argument a constraint of type con and returns an
+   “idempotent” substitution of type subst *)
+
+fun solve c =
+  (case c 
+    of TRIVIAL => idsubst
+     | (t1 ~ t2) => 
+        (case (t1, t2) 
+          of (TYVAR t1, TYVAR t2) => t1 |--> TYVAR t2
+           | (TYVAR t1, TYCON t2) => t1 |--> TYCON t2
+           | (TYCON t1, TYVAR t2) => t2 |--> TYCON t1
+           | (TYCON t1, TYCON t2) => if eqType(TYCON t1, TYCON t2)
+                                     then 
+                                      idsubst
+                                     else
+                                      unsatisfiableEquality (TYCON t1, TYCON t2)
+           | (CONAPP t1, TYVAR t2) => if not (member t2 (freetyvars (CONAPP t1)))
+                                      then 
+                                        t2 |--> CONAPP t1
+                                      else 
+                                       unsatisfiableEquality (CONAPP t1, TYVAR t2)
+           (* | (CONAPP t1, TYCON t2) => unsatisfiableEquality (CONAPP t1, TYCON t2) *)
+           | (TYVAR t1, CONAPP t2) => if not (member t1 (freetyvars (CONAPP t2)))
+                                      then 
+                                        t1 |--> CONAPP t2
+                                      else 
+                                       unsatisfiableEquality (TYVAR t1, CONAPP t2)
+           (* | (TYCON t1, CONAPP t2) => unsatisfiableEquality (TYCON t1, CONAPP t2) *)
+           | (CONAPP (t1, l1), CONAPP (t2, l2)) => 
+                (case (l1, l2) 
+                  of (x::xs, y::ys) => solve ((t1 ~ t2) /\ (CONAPP (x, xs) ~ CONAPP (y, ys)))
+                   | (_, _) => idsubst)
+           | (z, j) => unsatisfiableEquality (z, j)) (* everything else case *)
+     | (c1 /\ c2) => compose (solve c2, solve c1))        
+        (* (case (c1, c2) 
+          of ([], []) => idsubst
+           | (t1, []) => compose (solve t1, idsubst)
+           | ([], t2) => compose (idsubst, solve t2))) *)
+            (* | CONAPP of ty * ty list     *) 
+
+            
+
+(* Helpful notes :
+      datatype con = ~  of ty  * ty
+                        | /\ of con * con
+                        | TRIVIAL *)
+(* datatype ty = TYVAR  of tyvar               (* type variable alpha *)
+            | TYCON  of tycon               (* type constructor mu *)
+            | CONAPP of ty * ty list     *)
+(* datatype ty = TYVAR  of tyvar               (* type variable alpha *)
+            | TYCON  of tycon               (* type constructor mu *)
+            | CONAPP of ty * ty list        type-level application *)
+(* val _ = op compose : subst * subst -> subst *)
+
+
 (* type declarations for consistency checking *)
 val _ = op solve : con -> subst
 (* constraint solving ((elided)) (THIS CAN'T HAPPEN -- claimed code was not used) *)
@@ -1657,6 +1714,11 @@ fun hasNoSolution c = (solve c; false) handle TypeError _ => true
 fun hasGoodSolution c = solves (solve c, c) handle TypeError _ => false
 val hasSolution = not o hasNoSolution : con -> bool
 fun solutionEquivalentTo (c, theta) = eqsubst (solve c, theta)
+
+(* added by us TL & SP *)
+
+(* solution to constraint is equivalent to subst *)
+       
 (* utility functions for {\uml} S435c *)
 (* filled in when implementing uML *)
 (* exhaustiveness analysis for {\uml} S435b *)
@@ -2552,7 +2614,9 @@ val primitiveBasis =
                                funtype ([listtype alpha], listtype alpha)) :: 
                      [])
   end
-val predefs = 
+
+val predefined_included = false
+val predefs = if not predefined_included then [] else
                [ ";  predefined {\\nml} functions S423b "
                , "(define bind (x y alist)"
                , "  (if (null? alist)"
@@ -2774,3 +2838,62 @@ val _ = if hasOption "NORUN" then ()
         else perform (strip_options DEFAULT (CommandLine.arguments ()))
 (* type declarations for consistency checking *)
 val _ = op strip_options : action -> string list -> action * string list
+
+val () = Unit.checkAssert "int ~ bool cannot be solved"
+         (fn () => hasNoSolution (inttype ~ booltype))
+val () = Unit.checkAssert "bool ~ bool can be solved"
+         (fn () => hasSolution (booltype ~ booltype))
+val () = Unit.checkAssert "bool ~ bool is solved by the identity substitution"
+         (fn () => solutionEquivalentTo (booltype ~ booltype, idsubst))
+val () = Unit.checkAssert "bool ~ 'a is solved by 'a |--> bool"
+         (fn () => solutionEquivalentTo (booltype ~ TYVAR "'a", 
+                                         "'a" |--> booltype))
+(* Unit Tests *)
+val () = Unit.checkAssert "bool ~ int cannot be solved"
+         (fn () => hasNoSolution (booltype ~ inttype))
+
+val () = Unit.checkAssert "sym ~ sym can be solved"
+         (fn () => hasGoodSolution (symtype ~ symtype))
+
+val () = Unit.checkAssert "sym ~ sym is solved by the identity substitution"
+         (fn () => solutionEquivalentTo (symtype ~ symtype, idsubst))
+
+val () = Unit.checkAssert "'a ~ bool is solved by 'a |--> 'bool'"
+         (fn () => solutionEquivalentTo (TYVAR "'a" ~ booltype, 
+                                         "'a" |--> booltype))
+                                         
+val () = Unit.checkAssert "'a ~ 'b is solved by 'a |--> 'b"
+         (fn () => hasGoodSolution (TYVAR "'a" ~ TYVAR "'b"))
+
+val () = Unit.checkAssert "'b ~ 'a is solved by 'b |--> 'a"
+         (fn () => hasGoodSolution (TYVAR "'b" ~ TYVAR "'a"))
+
+val () = Unit.checkAssert "'a ~ 'b is solved by 'a |--> 'b"
+         (fn () => solutionEquivalentTo (TYVAR "'a" ~ TYVAR "'b", 
+                                         "'a" |--> TYVAR "'b"))
+                                         
+val () = Unit.checkAssert "conapp int ~ conapp int can be solved"
+         (fn () => hasGoodSolution (CONAPP (TYCON "list", [inttype]) ~ CONAPP (TYCON "list", [inttype])))
+
+val () = Unit.checkAssert "conapp int ~ conapp bool cannot be solved"
+         (fn () => hasNoSolution (CONAPP (TYCON "list", [inttype]) ~ CONAPP (TYCON "list", [booltype])))
+
+val () = Unit.checkAssert "conapp int ~ int cannot be solved"
+         (fn () => hasNoSolution (CONAPP (TYCON "list", [inttype]) ~ inttype))
+
+val () = Unit.checkAssert "int ~ conapp int cannot be solved"
+         (fn () => hasNoSolution (inttype ~ CONAPP (TYCON "list", [inttype])))
+
+val () = Unit.checkAssert "'a ~ conapp int can be solved"
+         (fn () => hasSolution (TYVAR "'a" ~ CONAPP (TYCON "list", [inttype])))
+
+val () = Unit.checkAssert "conapp int ~ 'a can be solved"
+         (fn () => hasSolution (CONAPP (TYCON "list", [inttype]) ~ TYVAR "'a"))
+
+  (* CONAPP (TYCON "list", [ty]) *)
+
+
+
+
+
+val () = Unit.report () (*CHANGE AHHHHHHHHHHHHHHHHH THIS WHEN SUBMIT AHHHHHHH sdfvsdvcdscvdsvsdvsdvsd*)
