@@ -1660,36 +1660,32 @@ fun solve c =
     of TRIVIAL => idsubst
      | (t1 ~ t2) => 
         (case (t1, t2) 
-          of (TYVAR t, _) => if not (member t1 (freetyvars t2)))
+          of (TYVAR t, _) => if not (member t (freetyvars t2))
+                             then 
+                              t |--> t2
+                             else 
+                              unsatisfiableEquality (t1, t2)
+           | (_, TYVAR t) => if not (member t (freetyvars t1))
                                       then 
-                                        t1 |--> t2
+                                        t |--> t1
                                       else 
-                                       unsatisfiableEquality (t1, t2)
-           | (TYCON t1, TYVAR t2) => t2 |--> TYCON t1
+                                       unsatisfiableEquality (t1, TYVAR t)
            | (TYCON t1, TYCON t2) => if eqType(TYCON t1, TYCON t2)
                                      then 
                                       idsubst
                                      else
                                       unsatisfiableEquality (TYCON t1, TYCON t2)
-           | (CONAPP t1, TYVAR t2) => if not (member t2 (freetyvars (CONAPP t1)))
-                                      then 
-                                        t2 |--> CONAPP t1
-                                      else 
-                                       unsatisfiableEquality (CONAPP t1, TYVAR t2)
-           (* | (CONAPP t1, TYCON t2) => unsatisfiableEquality (CONAPP t1, TYCON t2) *)
            
+           (* | (CONAPP t1, TYCON t2) => unsatisfiableEquality (CONAPP t1, TYCON t2) *)
            (* | (TYCON t1, CONAPP t2) => unsatisfiableEquality (TYCON t1, CONAPP t2) *)
            | (CONAPP (t1, l1), CONAPP (t2, l2)) => 
                 (case (l1, l2) 
                   of (x::xs, y::ys) => solve ((t1 ~ t2) /\ (CONAPP (x, xs) ~ CONAPP (y, ys)))
-                   | (_, _) => idsubst)
-           | (z, j) => unsatisfiableEquality (z, j)) (* everything else case *)
-     | (c1 /\ c2) => compose (solve c2, solve c1))        
-        (* (case (c1, c2) 
-          of ([], []) => idsubst
-           | (t1, []) => compose (solve t1, idsubst)
-           | ([], t2) => compose (idsubst, solve t2))) *)
-            (* | CONAPP of ty * ty list     *) 
+                   | ([], []) =>  solve (t1 ~ t2)
+                   | _ => unsatisfiableEquality (t1, t2))
+           | _ => unsatisfiableEquality (t1, t2)) (* everything else case *)
+     | (c1 /\ c2) => compose (solve c1, solve c2))        
+
 
             
 
@@ -2889,9 +2885,26 @@ val () = Unit.checkAssert "'a ~ conapp int can be solved"
 val () = Unit.checkAssert "conapp int ~ 'a can be solved"
          (fn () => hasSolution (CONAPP (TYCON "list", [inttype]) ~ TYVAR "'a"))
 
-  (* CONAPP (TYCON "list", [ty]) *)
+val () = Unit.checkAssert "conapp (conapp int) ~ conapp (conapp bool) cannot be solved"
+         (fn () => hasNoSolution (CONAPP (TYCON "list", [CONAPP (TYCON "list", [inttype])]) ~ CONAPP (TYCON "list", [CONAPP (TYCON "list", [booltype])])))
 
+val () = Unit.checkAssert "conapp (conapp 'a) ~ conapp (conapp 'b) is solved by 'a |--> 'b"
+         (fn () => solutionEquivalentTo (CONAPP (TYCON "list", [TYVAR "'a"]) ~ CONAPP (TYCON "list", [TYVAR "'b"]), "'a" |--> TYVAR "'b"))
 
+val () = Unit.checkAssert "conapp (conapp 'a) ~ conapp (conapp int) is solved by 'a |--> int"
+         (fn () => hasSolution (CONAPP (TYCON "list", [TYVAR "'a"]) ~ CONAPP (TYCON "list", [inttype])))
+
+val () = Unit.checkAssert "conapp (conapp int) ~ conapp int cannot be solved"
+         (fn () => hasNoSolution (CONAPP (TYCON "list", [CONAPP (TYCON "list", [inttype])]) ~ CONAPP (TYCON "list", [inttype])))
+
+val () = Unit.checkAssert "bool ~ bool ^ int ~ int can be solved"
+         (fn () => hasGoodSolution ((booltype ~ booltype) /\ (inttype ~ inttype)))
+
+val () = Unit.checkAssert "bool ~ int ^ int ~ int cannot be solved"
+         (fn () => hasNoSolution ((booltype ~ inttype) /\ (inttype ~ inttype)))
+    
+val () = Unit.checkAssert "'a ~ bool ^ 'a ~ int cannot be solved"
+         (fn () => hasNoSolution ((TYVAR "'a" ~ booltype) /\ (TYVAR "'a" ~ inttype)))
 
 
 
