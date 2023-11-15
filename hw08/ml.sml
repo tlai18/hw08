@@ -1660,16 +1660,22 @@ fun solve c =
     of TRIVIAL => idsubst
      | (t1 ~ t2) => 
         (case (t1, t2) 
-          of (TYVAR t, _) => if not (member t (freetyvars t2))
+          of (TYVAR t, _) => if eqType(t2, t1) orelse eqType(t2, booltype) 
+                                               orelse eqType(t2, symtype) 
+                                               orelse eqType(t2, inttype) 
+                                               orelse not (member t (freetyvars t2))
                              then 
                               t |--> t2
                              else 
                               unsatisfiableEquality (t1, t2)
-           | (_, TYVAR t) => if not (member t (freetyvars t1))
+           | (_, TYVAR t) => if eqType(t1, t2) orelse eqType(t1, booltype) 
+                                               orelse eqType(t1, symtype) 
+                                               orelse eqType(t1, inttype) 
+                                               orelse not (member t (freetyvars t1))
                                       then 
                                         t |--> t1
                                       else 
-                                       unsatisfiableEquality (t1, TYVAR t)
+                                       unsatisfiableEquality (t1, t2)
            | (TYCON t1, TYCON t2) => if eqType(TYCON t1, TYCON t2)
                                      then 
                                       idsubst
@@ -1684,11 +1690,12 @@ fun solve c =
                    | ([], []) =>  solve (t1 ~ t2)
                    | _ => unsatisfiableEquality (t1, t2))
            | _ => unsatisfiableEquality (t1, t2)) (* everything else case *)
-     | (c1 /\ c2) => compose (solve c1, solve c2))        
-
-
-            
-
+     | (c1 /\ c2) => let 
+                      val theta1 = solve c1
+                      val theta2 = solve (consubst theta1 c2)
+                     in 
+                      compose (theta2, theta1)
+                     end)
 (* Helpful notes :
       datatype con = ~  of ty  * ty
                         | /\ of con * con
@@ -1729,13 +1736,38 @@ fun typeof (e, Gamma) =
             in  (tau :: taus, c /\ c')
             end
 
+(* DO NOW AND GET BIG MY G *)
+fun literal v =
+  (case v of NUM _ => (inttype, TRIVIAL)
+           | BOOLV _ => (booltype, TRIVIAL)
+           | SYM _ => (symtype, TRIVIAL)
+           | NIL => (listtype alpha, TRIVIAL)
+           | PRIMITIVE _ => raise BugInTypeInference "Primitive Bug"
+           | CLOSURE _ => raise BugInTypeInference "Closure Bug"
+           | PAIR (v1, v2) => 
+           let
+               val (type1, c1) = literal v1
+               val (type2, c2) = literal v2
+               val c = c1 /\ c2 /\ listtype type1 ~ type2
+           in
+              (listtype type1, c)
+           end)
+  
+
+
 (* function [[literal]], to infer the type of a literal constant ((prototype)) 438b *)
-      fun literal _ = raise LeftAsExercise "literal"
+      (* fun literal _ = raise LeftAsExercise "literal" *)
+(* HELPFUL MAYBE?: val _ = op literal : value -> ty * con *)
+(* The literal function should give a suitable type to integer literals, 
+Boolean literals, symbol literals (which have type sym), and quoted lists whose elements have the same type (this includes empty lists).
+For example, the nano-ML value '(1 2 3) should have type int list.
+Values created using CLOSURE or PRIMITIVE cannot possibly appear in a LITERAL node of an abstract syntax tree, so if your literal function sees such a value it 
+should just raise the predefined BugInTypeInference exception. *)
 
 (* function [[ty]], to infer the type of a \nml\ expression, given [[Gamma]] 438c *)
       fun ty (LITERAL n) = literal n
         (* more alternatives for [[ty]] 438d *)
-          | ty (VAR x) = (freshInstance (findtyscheme (x, Gamma)), TRIVIAL)
+        | ty (VAR x) = (freshInstance (findtyscheme (x, Gamma)), TRIVIAL)
         (* more alternatives for [[ty]] 438e *)
         | ty (APPLY (f, actuals)) = 
              (case typesof (f :: actuals, Gamma)
@@ -1750,11 +1782,122 @@ fun typeof (e, Gamma) =
         | ty (LETX (LETSTAR, (b :: bs), body)) = 
             ty (LETX (LET, [b], LETX (LETSTAR, bs, body)))
         (* more alternatives for [[ty]] ((prototype)) 438g *)
-        | ty (IFX (e1, e2, e3))        = raise LeftAsExercise "type for IFX"
-        | ty (BEGIN es)                = raise LeftAsExercise "type for BEGIN"
-        | ty (LAMBDA (formals, body))  = raise LeftAsExercise "type for LAMBDA"
-        | ty (LETX (LET, bs, body))    = raise LeftAsExercise "type for LET"
-        | ty (LETX (LETREC, bs, body)) = raise LeftAsExercise "type for LETREC"
+        | ty (IFX (e1, e2, e3))        = 
+        let
+          val t1 = ty e1 
+          val t2 = ty e2
+          val t3 = ty e3
+        in
+          if eqType(fst t1, booltype) then 
+              if eqType(fst t2, fst t3) then 
+                t2
+              else raise TypeError "Expressions 2 and 3 should be of the same type"
+            else raise TypeError "First expression should be of type BOOL"
+        end
+        | ty (BEGIN es)                = 
+        (case es
+              of [] => (unittype, TRIVIAL)
+               | _ => 
+                let
+                  val types = List.map ty es
+                in
+                  List.last types
+                end )
+        | ty (LAMBDA (formals, body))  = 
+            let
+              val typeVars = map freshtyvar formals
+              val typeSchemes = map (fn (alpha) => FORALL ([], alpha)) typeVars
+              val extendedEnv = ListPair.foldrEq bindtyscheme Gamma (formals, typeSchemes)
+              val typeAndConstraints = typeof (body, extendedEnv)
+            in
+              (funtype (typeVars, fst typeAndConstraints), snd typeAndConstraints)
+            end
+
+            
+              (* bindtyscheme(x, o, gamma) *)
+              (* bindtyscheme : name * type_scheme * type_env ‐> type_env
+              fun bindtyscheme (x, sigma as FORALL (bound, tau), (Gamma, free)) = (bind (x, sigma, Gamma), union (diff (freetyvars tau, bound), free)) *)
+              (* instantiate(va . t, [t']) *) 
+        | ty (LETX (LET, bs, body))    = 
+
+            let
+              val names = map fst bs
+              val es = map snd bs
+              
+              val bsTypeAndConstraints = map ty es
+              val (types, initialConstraints) = ListPair.unzip bsTypeAndConstraints
+
+              val theta = solve (conjoinConstraints initialConstraints)
+
+              val alphas = inter(dom theta, freetyvarsGamma Gamma)
+
+              val C' = conjoinConstraints (map (fn alpha => (TYVAR alpha ~ tysubst theta (TYVAR alpha))) alphas)
+
+              val sigmas = map (fn (ty) => generalize(tysubst theta ty, union (freetyvarsGamma Gamma, freetyvarsConstraint C'))) types
+
+              val extendedEnv = ListPair.foldrEq bindtyscheme Gamma (names, sigmas)
+
+              val (finalBodyType, C_b) = typeof (body, extendedEnv)
+                    
+                    (* funty :: actualtypes, c) =>
+                      let val rettype = freshtyvar ()
+                      in  (rettype, c /\ (funty ~ funtype (actualtypes, rettype)
+                                                                              ))
+                      end) *)
+              (* Compute the intersection of dom(θ) and ftv(Γ) *)
+              (* fun dom theta = map (fn (a, _) => a) theta *)
+              (* freetyvarsGamma : type_env ‐> name set *)
+            in
+              (finalBodyType, C_b /\ C')
+            end
+        | ty (LETX (LETREC, bs, body)) = 
+            let
+                val names = map fst bs
+                val es = map snd bs
+                
+                val bsTypeAndConstraints = map ty es
+                val (types, initialConstraints) = ListPair.unzip bsTypeAndConstraints
+
+                (*LETREC edits*)
+                val typeVars = map freshtyvar names 
+                val typeSchemes = map (fn (alpha) => FORALL ([], alpha)) typeVars
+                val gamma_E = ListPair.foldrEq bindtyscheme Gamma (names, typeSchemes)
+
+                val otherConstraints = ListPair.mapEq(fn (t, a) => t ~ a) (types, typeVars)
+                val c = conjoinConstraints(initialConstraints) /\ conjoinConstraints(otherConstraints)
+                (**)
+
+                val theta = solve (conjoinConstraints initialConstraints)
+
+                val alphas = inter(dom theta, freetyvarsGamma Gamma)
+
+                val C' = conjoinConstraints (map (fn alpha => (TYVAR alpha ~ tysubst theta (TYVAR alpha))) alphas)
+
+                val sigmas = map (fn (ty) => generalize(tysubst theta ty, union (freetyvarsGamma Gamma, freetyvarsConstraint C'))) types
+
+                val extendedEnv = ListPair.foldrEq bindtyscheme Gamma (names, sigmas)
+
+                val (finalBodyType, C_b) = typeof (body, extendedEnv)
+                      
+                      (* funty :: actualtypes, c) =>
+                        let val rettype = freshtyvar ()
+                        in  (rettype, c /\ (funty ~ funtype (actualtypes, rettype)
+                                                                                ))
+                        end) *)
+                (* Compute the intersection of dom(θ) and ftv(Γ) *)
+                (* fun dom theta = map (fn (a, _) => a) theta *)
+                (* freetyvarsGamma : type_env ‐> name set *)
+                
+                  (* let*)
+                
+
+                (* val typeAndConstraints = typeof (body, extendedEnv)
+                    in
+                (funtype (typeVars, fst typeAndConstraints), snd typeAndConstraints)
+                end   *)
+              in
+                (finalBodyType, C_b /\ C')
+              end
 (* type declarations for consistency checking *)
 val _ = op typeof  : exp      * type_env -> ty      * con
 val _ = op typesof : exp list * type_env -> ty list * con
@@ -2601,13 +2744,32 @@ val primitiveBasis =
                                                      "car applied to non-list"),
                                funtype ([listtype alpha], alpha)) ::
                      ("cdr",   unaryOp
-                                 (fn (PAIR (_, cdr)) => cdr 
-                                   | NIL => raise RuntimeError
-                                                     "cdr applied to empty list"
-                                   | _   => raise BugInTypeInference
-                                                     "cdr applied to non-list"),
-                               funtype ([listtype alpha], listtype alpha)) :: 
-                     [])
+                                (fn (PAIR (_, cdr)) => cdr 
+                                  | NIL => raise RuntimeError
+                                                "cdr applied to empty list"
+                                  | _   => raise BugInTypeInference
+                                                "cdr applied to non-list"),
+                              funtype ([listtype alpha], listtype alpha))
+                                                                        ::
+                    ("pair",  binaryOp (fn (a, b) => PAIR (a, b)),
+                              funtype ([alpha, beta]
+                                      , pairtype (alpha, beta)))
+                                                                        ::
+                    ("fst",  unaryOp 
+                                (fn (PAIR (a, b)) => a
+                                  | _ => raise RuntimeError
+                                              "fst applies to non-pair"),
+                              funtype ([pairtype (alpha, beta)]
+                                      , alpha))
+                                                                        ::
+                    ("snd",  unaryOp 
+                                (fn (PAIR (a, b)) => b
+                                  | _ => raise RuntimeError
+                                              "snd applies to non-pair"),
+                              funtype ([pairtype (alpha, beta)]
+                                      , beta))
+                                                                        ::
+                    [])
   end
 
 val predefined_included = false
@@ -2843,7 +3005,23 @@ val () = Unit.checkAssert "bool ~ bool is solved by the identity substitution"
 val () = Unit.checkAssert "bool ~ 'a is solved by 'a |--> bool"
          (fn () => solutionEquivalentTo (booltype ~ TYVAR "'a", 
                                          "'a" |--> booltype))
+(* additional check for validity. *)
+fun isIdempotent pairs =
+    let fun distinct a' (a, tau) = a <> a' andalso not (member a' (freetyvars tau))
+        fun good (prev', (a, tau)::next) =
+              List.all (distinct a) prev' andalso List.all (distinct a) next
+              andalso good ((a, tau)::prev', next)
+          | good (_, []) = true
+    in  good ([], pairs)
+    end
+val solve =
+    fn c => let val theta = solve c
+            in  if isIdempotent theta then theta
+                else raise BugInTypeInference "non-idempotent substitution"
+            end
+
 (* Unit Tests *)
+
 val () = Unit.checkAssert "bool ~ int cannot be solved"
          (fn () => hasNoSolution (booltype ~ inttype))
 
@@ -2897,15 +3075,79 @@ val () = Unit.checkAssert "conapp (conapp 'a) ~ conapp (conapp int) is solved by
 val () = Unit.checkAssert "conapp (conapp int) ~ conapp int cannot be solved"
          (fn () => hasNoSolution (CONAPP (TYCON "list", [CONAPP (TYCON "list", [inttype])]) ~ CONAPP (TYCON "list", [inttype])))
 
-val () = Unit.checkAssert "bool ~ bool ^ int ~ int can be solved"
-         (fn () => hasGoodSolution ((booltype ~ booltype) /\ (inttype ~ inttype)))
 
-val () = Unit.checkAssert "bool ~ int ^ int ~ int cannot be solved"
-         (fn () => hasNoSolution ((booltype ~ inttype) /\ (inttype ~ inttype)))
-    
-val () = Unit.checkAssert "'a ~ bool ^ 'a ~ int cannot be solved"
-         (fn () => hasNoSolution ((TYVAR "'a" ~ booltype) /\ (TYVAR "'a" ~ inttype)))
+(* Constraint /\ Case Testing *)
 
+val () = 
+   let val c1 = booltype ~ booltype  
+     val c2 = inttype ~ inttype  
+     val testname = constraintString(c1 /\ c2) 
+in Unit.checkAssert testname (fn () => hasGoodSolution(c1 /\ c2)) end
+
+val () = 
+   let val c1 = booltype ~ inttype  
+     val c2 = inttype ~ inttype  
+     val testname = constraintString(c1 /\ c2) 
+in Unit.checkAssert testname (fn () => hasNoSolution(c1 /\ c2)) end
+
+val () = 
+   let val c1 = TYVAR "'a" ~ TYVAR "'b" 
+     val c2 = TYVAR  "'a" ~ TYVAR "'c" 
+     val testname = constraintString(c1 /\ c2) 
+in Unit.checkAssert testname (fn () => hasGoodSolution(c1 /\ c2)) end
+
+val () = 
+   let val c1 = TYVAR "'a" ~ CONAPP (TYCON "list", [inttype])
+     val c2 = TYVAR "'a" ~ CONAPP (TYCON "list", [booltype])
+     val testname = constraintString(c1 /\ c2) 
+in Unit.checkAssert testname (fn () => hasNoSolution(c1 /\ c2)) end
+
+val () = 
+   let val c1 = CONAPP (TYCON "list", [inttype]) ~ TYVAR "'a"
+     val c2 = CONAPP (TYCON "list", [booltype]) ~ TYVAR "'a"
+     val testname = constraintString(c1 /\ c2) 
+in Unit.checkAssert testname (fn () => hasNoSolution(c1 /\ c2)) end
+
+val () = 
+   let val c1 = TYVAR "'a" ~ CONAPP (TYCON "list", [inttype])
+     val c2 = TYVAR "'a" ~ CONAPP (TYCON "list", [inttype])
+     val testname = constraintString(c1 /\ c2) 
+in Unit.checkAssert testname (fn () => hasSolution(c1 /\ c2)) end
+
+val () = 
+   let val c1 = CONAPP (TYCON "list", [inttype]) ~ TYVAR "'a"
+     val c2 = CONAPP (TYCON "list", [inttype]) ~ TYVAR "'a"
+     val testname = constraintString(c1 /\ c2) 
+in Unit.checkAssert testname (fn () => hasSolution(c1 /\ c2)) end
+
+val () = 
+   let val c1 = TYVAR "'a" ~ inttype
+     val c2 = TYVAR  "'a" ~ booltype 
+     val testname = constraintString(c1 /\ c2) 
+in Unit.checkAssert testname (fn () => hasNoSolution(c1 /\ c2)) end
+
+val () = 
+   let val c1 = TYVAR "'a" ~ inttype
+     val c2 = TYVAR  "'b" ~ booltype 
+     val c3 = TYVAR  "'c" ~ symtype
+     val testname = constraintString(c1 /\ c2 /\ c3)
+in Unit.checkAssert testname (fn () => hasGoodSolution(c1 /\ c2 /\ c3)) end
+
+val () = 
+   let val c1 = TYVAR "'a" ~ TYVAR "'b"
+     val c2 = TYVAR  "'b" ~ TYVAR "'c"
+     val c3 = TYVAR  "'c" ~ TYVAR "'a"
+     val testname = constraintString(c1 /\ c2 /\ c3)
+in Unit.checkAssert testname (fn () => hasSolution(c1 /\ c2 /\ c3)) end
+
+val () = 
+   let val c1 = TYVAR "'a" ~ TYVAR "'b"
+     val c2 = TYVAR  "'b" ~ TYVAR "'c"
+     val c3 = TYVAR  "'c" ~ TYVAR "'d"
+     val c4 = TYVAR  "'a" ~ booltype
+     val c5 = TYVAR  "'d" ~ inttype 
+     val testname = constraintString(c1 /\ c2 /\ c3 /\ c4 /\ c5)
+in Unit.checkAssert testname (fn () => hasNoSolution(c1 /\ c2 /\ c3 /\ c4 /\ c5)) end
 
 
 val () = Unit.report () (*CHANGE AHHHHHHHHHHHHHHHHH THIS WHEN SUBMIT AHHHHHHH sdfvsdvcdscvdsvsdvsdvsd*)
